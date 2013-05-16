@@ -1,0 +1,12 @@
+1. 
+autoreconf -ivf
+
+2.
+CFLAGS="-I/home/kane/Util/include" LDFLAGS="-L/home/kane/Util/lib"  LIBS="-laio" ./configure --enable-debug=full --prefix=`pwd`
+make 
+make install
+
+3.
+if cannot open shared lib when running, and LD_LIBRARY_PATH does not work, 
+add this option to src/Makefile when building
+-Wl,-rpath=/home/kane/Util/lib

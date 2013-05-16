@@ -19,15 +19,24 @@
 
 extern struct settings settings;
 
-static uint32_t nfree_msinfoq;         /* # free memory slabinfo q */
-static struct slabhinfo free_msinfoq;  /* free memory slabinfo q */
+//static uint32_t nfree_msinfoq;       /* # free memory slabinfo q */
+//static struct slabhinfo free_msinfoq;/* free memory slabinfo q */
+//accessible by fc_aio 
+uint32_t nfree_msinfoq;                /* # free memory slabinfo q */
+struct slabhinfo free_msinfoq;         /* free memory slabinfo q */
 static uint32_t nfull_msinfoq;         /* # full memory slabinfo q */
 static struct slabhinfo full_msinfoq;  /* # full memory slabinfo q */
 
 static uint32_t nfree_dsinfoq;         /* # free disk slabinfo q */
 static struct slabhinfo free_dsinfoq;  /* free disk slabinfo q */
-static uint32_t nfull_dsinfoq;         /* # full disk slabinfo q */
-static struct slabhinfo full_dsinfoq;  /* full disk slabinfo q */
+//static uint32_t nfull_dsinfoq;       /* # full disk slabinfo q */
+//static struct slabhinfo full_dsinfoq;/* full disk slabinfo q */
+//accessible by fc_aio 
+uint32_t nfull_dsinfoq;                /* # full disk slabinfo q */
+struct slabhinfo full_dsinfoq;         /* full disk slabinfo q */
+
+/* full sdd queue is accessed in 2 threads */
+pthread_mutex_t full_dsinfoq_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static uint8_t nctable;                /* # class table entry */
 static struct slabclass *ctable;       /* table of slabclass indexed by cid */
@@ -149,7 +158,8 @@ slab_full(struct slabinfo *sinfo)
  * Return and optionally verify the memory slab with the given slab_size
  * offset from base mstart.
  */
-static void *
+//static void *, fc_aio use this function
+void *
 slab_from_maddr(uint32_t addr, bool verify)
 {
     struct slab *slab;
@@ -173,7 +183,8 @@ slab_from_maddr(uint32_t addr, bool verify)
  * Return the slab_size offset for the given disk slab from the base
  * of the disk.
  */
-static off_t
+//static off_t, fc_aio use this function
+off_t
 slab_to_daddr(struct slabinfo *sinfo)
 {
     off_t off;
@@ -223,9 +234,19 @@ slab_evict(void)
     ASSERT(!TAILQ_EMPTY(&full_dsinfoq));
     ASSERT(nfull_dsinfoq > 0);
 
+    log_debug(LOG_NOTICE, "when evict, nfull_dsinfoq=%d",
+	    nfull_dsinfoq);
+
+    pthread_mutex_lock(&full_dsinfoq_lock);
+
     sinfo = TAILQ_FIRST(&full_dsinfoq);
     nfull_dsinfoq--;
     TAILQ_REMOVE(&full_dsinfoq, sinfo, tqe);
+
+    pthread_mutex_unlock(&full_dsinfoq_lock);
+
+    slabinfo_print(sinfo);
+
     ASSERT(!sinfo->mem);
     ASSERT(sinfo->addr < ndslab);
 
@@ -233,6 +254,9 @@ slab_evict(void)
     slab = (struct slab *)evictbuf;
     size = settings.slab_size;
     off = slab_to_daddr(sinfo);
+
+    log_debug(LOG_NOTICE, "when evict, offset is %llu", off);
+
     n = pread(fd, slab, size, off);
     if (n < size) {
         log_error("pread fd %d %zu bytes at offset %"PRIu64" failed: %s", fd,
@@ -262,7 +286,8 @@ slab_evict(void)
     return FC_OK;
 }
 
-static void
+//static void
+void
 slab_swap_addr(struct slabinfo *msinfo, struct slabinfo *dsinfo)
 {
     uint32_t m_addr;
@@ -279,6 +304,9 @@ slab_swap_addr(struct slabinfo *msinfo, struct slabinfo *dsinfo)
     dsinfo->addr = m_addr;
     dsinfo->mem = 1;
 }
+
+#if 0
+/* sync drain */
 
 static rstatus_t
 _slab_drain(void)
@@ -333,6 +361,67 @@ _slab_drain(void)
     /* move msinfo (now a disk sinfo) to full q */
     nfull_dsinfoq++;
     TAILQ_INSERT_TAIL(&full_dsinfoq, msinfo, tqe);
+
+    return FC_OK;
+}
+#endif
+
+/* async drain */
+static rstatus_t
+_slab_drain(void)
+{
+    struct slabinfo *msinfo, *dsinfo; /* memory and disk slabinfo */
+
+    ASSERT(!TAILQ_EMPTY(&full_msinfoq));
+    ASSERT(nfull_msinfoq > 0);
+
+    ASSERT(!TAILQ_EMPTY(&free_dsinfoq));
+    ASSERT(nfree_dsinfoq > 0);
+
+    /* get memory sinfo from full q */
+    msinfo = TAILQ_FIRST(&full_msinfoq);
+    nfull_msinfoq--;
+    TAILQ_REMOVE(&full_msinfoq, msinfo, tqe);
+    ASSERT(msinfo->mem);
+    ASSERT(slab_full(msinfo));
+
+    /* get disk sinfo from free q */
+    dsinfo = TAILQ_FIRST(&free_dsinfoq);
+    nfree_dsinfoq--;
+    TAILQ_REMOVE(&free_dsinfoq, dsinfo, tqe);
+    ASSERT(!dsinfo->mem);
+
+    /* drain the memory to disk slab */
+    rstatus_t ret = async_write(msinfo, dsinfo);
+
+    if (ret != FC_OK) {
+        log_error("async_write failed: %s", strerror(errno));
+        return ret;
+    }
+
+    log_debug(LOG_DEBUG, "drain slab at memory (sid %"PRIu32" addr %"PRIu32") "
+              "to disk (sid %"PRIu32" addr %"PRIu32") in ASYNC", msinfo->sid,
+              msinfo->addr, dsinfo->sid, dsinfo->addr);
+
+#if 0
+    /* move into async_write */
+    /* swap msinfo <> dsinfo addresses */
+    slab_swap_addr(msinfo, dsinfo);
+
+    /* move dsinfo (now a memory sinfo) to free q */
+    nfree_msinfoq++;
+    TAILQ_INSERT_TAIL(&free_msinfoq, dsinfo, tqe);
+
+    /* Delay when async write completes
+     * do this in the completion handle function
+     * therefore, avoid in-consistency when slab_evict 
+     *
+     * move msinfo (now a disk sinfo) to full q 
+     * nfull_dsinfoq++; 
+     * TAILQ_INSERT_TAIL(&full_dsinfoq, msinfo, tqe); 
+     * */
+
+#endif
 
     return FC_OK;
 }
@@ -462,6 +551,9 @@ slab_put_item(struct item *it)
               it->nkey, item_key(it), it->offset, it->cid);
 }
 
+#if 0
+/* slab_read_item work with sync write */
+
 struct item *
 slab_read_item(uint32_t sid, uint32_t addr)
 {
@@ -508,8 +600,77 @@ done:
 
     return it;
 }
+#endif
 
-static rstatus_t
+/* work with async write */
+struct item *
+slab_read_item(uint32_t sid, uint32_t addr)
+{
+    struct slabclass *c;    /* slab class */
+    struct item *it;        /* item */
+    struct slabinfo *sinfo; /* slab info */
+    int n;                  /* bytes read */
+    off_t off;              /* offset to read from */
+    off_t aligned_off;      /* aligned offset to read from */
+    size_t aligned_size;    /* aligned size to read */
+
+    ASSERT(sid < nstable);
+    ASSERT(addr < settings.slab_size);
+
+    sinfo = &stable[sid];
+    c = &ctable[sinfo->cid];
+    it = NULL;
+
+    if (sinfo->mem) {
+        off = (off_t)sinfo->addr * settings.slab_size + addr;
+        fc_memcpy(readbuf, mstart + off, c->size);
+        it = (struct item *)readbuf;
+        goto done;
+    }
+
+    if (sinfo->persisted == 1) {       /* on ssd */
+
+	off = slab_to_daddr(sinfo) + addr;
+	aligned_off = ROUND_DOWN(off, 512);
+	aligned_size = ROUND_UP((c->size + (off - aligned_off)), 512);
+
+	n = pread(fd, readbuf, aligned_size, aligned_off);
+	if (n < aligned_size) {
+	    log_error("pread fd %d %zu bytes at offset %"PRIu64" failed: %s", fd,
+		    aligned_size, (uint64_t)aligned_off, strerror(errno));
+	    return NULL;
+	}
+
+	it = (struct item *)(readbuf + (off - aligned_off));
+
+    } else {                           /* in async-write buf */
+	/*  
+	 * this condition might happen that:
+	 * current thread enters this branch, then the reaper thread in 
+	 * fc_aio releases cb containing the slabbuf;
+	 * but data in cb will not be corrupted until subsequent 
+	 * async write consumes the released cb. 
+	 *
+	 * Considering event-driven is used in current thread, 
+	 * read/write cannot happen at the same time. We are safe.
+	 * */
+
+	ASSERT(((struct slab *)(sinfo->tempaddr))->magic 
+		== SLAB_MAGIC);
+
+        fc_memcpy(readbuf, sinfo->tempaddr + addr, c->size);
+        it = (struct item *)readbuf;
+    }
+
+done:
+    ASSERT(it->magic == ITEM_MAGIC);
+    ASSERT(it->cid == sinfo->cid);
+    ASSERT(it->sid == sinfo->sid);
+
+    return it;
+}
+
+    static rstatus_t
 slab_init_ctable(void)
 {
     struct slabclass *c;
@@ -522,76 +683,85 @@ slab_init_ctable(void)
     nctable = settings.profile_last_id + 1;
     ctable = fc_alloc(sizeof(*ctable) * nctable);
     if (ctable == NULL) {
-        return FC_ENOMEM;
+	return FC_ENOMEM;
     }
 
     for (cid = SLABCLASS_MIN_ID; cid < nctable; cid++) {
-        c = &ctable[cid];
-        c->nitem = slab_data_size() / profile[cid];
-        c->size = profile[cid];
-        c->slack = slab_data_size() - (c->nitem * c->size);
-        TAILQ_INIT(&c->partial_msinfoq);
+	c = &ctable[cid];
+	c->nitem = slab_data_size() / profile[cid];
+	c->size = profile[cid];
+	c->slack = slab_data_size() - (c->nitem * c->size);
+	TAILQ_INIT(&c->partial_msinfoq);
     }
 
     return FC_OK;
 }
 
-static void
+    static void
 slab_deinit_ctable(void)
 {
 }
 
-static rstatus_t
+    static rstatus_t
 slab_init_stable(void)
 {
     struct slabinfo *sinfo;
     uint32_t i, j;
 
     nstable = nmslab + ndslab;
+
+    loga("total # of slabs %zu", nstable);
+
     stable = fc_alloc(sizeof(*stable) * nstable);
     if (stable == NULL) {
-        return FC_ENOMEM;
+	return FC_ENOMEM;
     }
 
     /* init memory slabinfo q  */
     for (i = 0; i < nmslab; i++) {
-        sinfo = &stable[i];
+	sinfo = &stable[i];
 
-        sinfo->sid = i;
-        sinfo->addr = i;
-        sinfo->nalloc = 0;
-        sinfo->nfree = 0;
-        sinfo->cid = SLABCLASS_INVALID_ID;
-        sinfo->mem = 1;
+	sinfo->sid = i;
+	sinfo->addr = i;
+	sinfo->nalloc = 0;
+	sinfo->nfree = 0;
+	sinfo->cid = SLABCLASS_INVALID_ID;
+	sinfo->mem = 1;
 
-        nfree_msinfoq++;
-        TAILQ_INSERT_TAIL(&free_msinfoq, sinfo, tqe);
+	sinfo->persisted = 1;
+	sinfo->tempaddr = NULL;
+
+	nfree_msinfoq++;
+	TAILQ_INSERT_TAIL(&free_msinfoq, sinfo, tqe);
     }
 
     /* init disk slabinfo q */
     for (j = 0; j < ndslab && i < nstable; i++, j++) {
-        sinfo = &stable[i];
+	sinfo = &stable[i];
 
-        sinfo->sid = i;
-        sinfo->addr = j;
-        sinfo->nalloc = 0;
-        sinfo->nfree = 0;
-        sinfo->cid = SLABCLASS_INVALID_ID;
-        sinfo->mem = 0;
+	sinfo->sid = i;
+	sinfo->addr = j;
+	sinfo->nalloc = 0;
+	sinfo->nfree = 0;
+	sinfo->cid = SLABCLASS_INVALID_ID;
+	sinfo->mem = 0;
 
-        nfree_dsinfoq++;
-        TAILQ_INSERT_TAIL(&free_dsinfoq, sinfo, tqe);
+	sinfo->persisted = 1;
+	sinfo->tempaddr = NULL;
+
+	nfree_dsinfoq++;
+	TAILQ_INSERT_TAIL(&free_dsinfoq, sinfo, tqe);
     }
 
     return FC_OK;
 }
 
-static void
+    static void
 slab_deinit_stable(void)
 {
 }
 
-rstatus_t
+    rstatus_t
 slab_init(void)
 {
     rstatus_t status;
@@ -630,14 +800,14 @@ slab_init(void)
     readbuf = NULL;
 
     if (settings.ssd_device == NULL) {
-        log_error("ssd device file must be specified");
-        return FC_ERROR;
+	log_error("ssd device file must be specified");
+	return FC_ERROR;
     }
 
     /* init slab class table */
     status = slab_init_ctable();
     if (status != FC_OK) {
-        return status;
+	return status;
     }
 
     /* init nmslab, mstart and mend */
@@ -645,15 +815,15 @@ slab_init(void)
     mspace = nmslab * settings.slab_size;
     mstart = fc_mmap(mspace);
     if (mstart == NULL) {
-        log_error("mmap %zu bytes failed: %s", mspace, strerror(errno));
-        return FC_ENOMEM;
+	log_error("mmap %zu bytes failed: %s", mspace, strerror(errno));
+	return FC_ENOMEM;
     }
     mend = mstart + mspace;
 
     /* init ndslab, dstart and dend */
     status = fc_device_size(settings.ssd_device, &size);
     if (status != FC_OK) {
-        return status;
+	return status;
     }
     ndchunk = size / settings.slab_size;
     ASSERT(settings.server_n <= ndchunk);
@@ -665,39 +835,62 @@ slab_init(void)
     /* init disk descriptor */
     fd = open(settings.ssd_device, O_RDWR | O_DIRECT, 0644);
     if (fd < 0) {
-        log_error("open '%s' failed: %s", settings.ssd_device, strerror(errno));
-        return FC_ERROR;
+	log_error("open '%s' failed: %s", settings.ssd_device, strerror(errno));
+	return FC_ERROR;
+    }
+
+    /* init aio */
+    status = aio_init(fd, dspace);
+    if (status != FC_OK) {
+	return status;
     }
 
     /* init slab table */
     status = slab_init_stable();
     if (status != FC_OK) {
-        return status;
+	return status;
     }
 
     /* init evictbuf and readbuf */
     evictbuf = fc_mmap(settings.slab_size);
     if (evictbuf == NULL) {
-        log_error("mmap %zu bytes failed: %s", settings.slab_size,
-                  strerror(errno));
-        return FC_ENOMEM;
+	log_error("mmap %zu bytes failed: %s", settings.slab_size,
+		strerror(errno));
+	return FC_ENOMEM;
     }
     memset(evictbuf, 0xff, settings.slab_size);
 
     readbuf = fc_mmap(settings.slab_size);
     if (readbuf == NULL) {
-        log_error("mmap %zu bytes failed: %s", settings.slab_size,
-                  strerror(errno));
-        return FC_ENOMEM;
+	log_error("mmap %zu bytes failed: %s", settings.slab_size,
+		strerror(errno));
+	return FC_ENOMEM;
     }
     memset(readbuf, 0xff, settings.slab_size);
 
     return FC_OK;
 }
 
-void
+    void
 slab_deinit(void)
 {
+    aio_deinit();
+
     slab_deinit_ctable();
     slab_deinit_stable();
+}
+
+void
+slabinfo_print(struct slabinfo *s)
+{
+    loga("sid %u, addr %u, nalloc %u, nfree %u, cid %u",
+	    s->sid, s->addr, s->nalloc, s->nfree, s->cid);
+
+    if (s->mem)
+	loga("slab is in memory");
+    else
+	loga("slab is in ssd");
+
+    if (!s->persisted)
+	loga("slab is in tempaddr %p", s->tempaddr);
 }

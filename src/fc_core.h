@@ -112,6 +112,9 @@ struct slabclass;
 #include <fc_item.h>
 #include <fc_signal.h>
 
+#include <sys/eventfd.h>
+#include <fc_aio.h>
+
 struct context {
     int                ep;          /* epoll device */
     int                nevent;      /* # epoll event */

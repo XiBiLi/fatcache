@@ -1,0 +1,303 @@
+========================================
+src/fc.c
+========================================
+
+1. 
+how to daemonize [ref 2]
+
+
+========================================
+src/fc_core
+========================================
+
+1.
+core_start() --> server_listen() --> 
+conn_get() --> server_recv --> accept client
+
+2.
+core_loop() --> epoll_wait() --> core_core(): 
+core_error(), core_recv(), core_send()
+
+
+========================================
+src/server
+========================================
+
+1.
+server_recv() --> server_accept() -->
+conn_get() --> msg_recv, msg_send, client_close, client_active 
+
+
+========================================
+src/client
+========================================
+
+1.
+client_close reclaim resources like
+conn <1--*> msg <1--*> mbuf, 
+           (peer)
+
+
+Q:
+msg->swallow = 1
+
+
+========================================
+src/fc_itemx
+========================================
+
+1.
+itx_table[0]
+...
+itx_table[hash&HASHMASK]: a list of itemx
+...
+itx_table[HASHSIZE-1]:
+
+
+`free_itemxq`: a list of 'unused' itemx
+initially contains all itemx
+
+
+'all' itemx a stored in mmap area, zero-ed
+-----------------------------
+|itemx|itemx|itemx|...|itemx|
+-----------------------------
+
+
+2.
+__attribute__ ((__packed__))
+struct fields align on one-byte boundaries
+
+
+========================================
+src/fc_connection
+========================================
+
+1.
+epoll, ET (edge-triggered) mode
+
+2.
+`free_connq`: a list of 'unused' conn 
+reuse the memory space, not connection
+
+3.
+conn_get
+hook the other components to epoll
+
+ 
+========================================
+src/mbuf
+========================================
+
+1.
+`free_mbufq`
+
+2.
+mbuf header is at the tail end of the mbuf. This enables us to catch
+buffer overrun early by asserting on the magic value during get or
+put operations
+
+  <------------- mbuf_chunk_size ------------->
+  +-------------------------------------------+
+  |       mbuf data          |  mbuf header   |
+  |     (mbuf_offset)        | (struct mbuf)  |
+  +-------------------------------------------+
+  ^           ^         ^    |^
+  |           |         |    ||
+  \           |         |    ||\
+  mbuf->start \         |    || mbuf->end (one byte past valid bound)
+              mbuf->pos |    |\
+                        \    |  mbuf
+                       mbuf->last (one byte past valid byte)
+
+
+========================================
+src/fc_slab/item/itemx
+========================================
+
+1.
+ctable 
+<1--*> slabclass (item size), partial_msinfoq
+<1--*> slabinfo (addr by offset), slab size is globally fixed
+<1--*> item (addr by offset), item size is class-locally fixed 
+
+2.
+stable <1--*> ALL the slabinfo
+
+3.
+free_minforq <1--*> free slabs in mem, can hold `new` items
+slabclass:partial_msinfoq <1--*> paritally filled slabs
+full_minforq <1--*> full slabs in mem, `drained` to be free
+
+free_dinforq <1--*> free slabs in SSD, hold drained mem slabs 
+full_dinforq <1--*> free slabs in SSD, `evicted` to be free, upt itemx 
+
+4.
+slab_read_item
+    get from memory --> memcpy
+    get from ssd    --> align&round to 512*, pread
+
+5.
+slab_get_item: always return mem-item
+    slab_drain: to get free mem-slab
+	pwrite slab_size from mem to ssd
+	
+    slab_evict: to get free itemx and free dsinfoq
+	get from ssd    --> pread slab_size
+	upt in-mem itemx 
+	slab is dropped at this moment
+
+    `FIFO`
+
+
+NOTE:
+1.
+one slabclass has certain item size
+item = chunk = object = buffer [ref 1]
+
+2.
+itemx table is used when GET/GETS, 
+if hit in itemx table, sid and item addr are got;
+using sid&addr to get item from mem/ssd
+
+3.
+SSD is opened with O_DIRECT, bypassing OS cache/buffer
+
+
+========================================
+src/fc_queue.h
+========================================
+
+1.
+#define __offsetof(type, field) ((size_t)(&(((type *)0)->field)))
+
+
+========================================
+src/fc_message/memcache/request/respond
+========================================
+
+1.
+msg_parse() ---> req_recv_done(.., msg, nmsg), 
+where 'conn->rmsg = nmsg' makes 'msg_recv_chain' work
+
+2.
+msg->peer is set when rsp_send_value/status
+
+conn:omsg_q
+     |
+     -->reqmsg---reqmsg---reqmsg------
+	  |        |        |      
+	(peer)   (peer)   (peer)
+	  |        |        |
+	rspmsg   rspmsg   rspmsg 
+
+conn:rmsg, current reqmsg, the only one could swallow
+conn:smsg, current rspmsg
+
+
+3.
+req_process_delete() just removes itemx, 
+does touch the item in mem/ssd
+garbage collection when doing slab eviction
+
+
+4.
+req_process_set() stores a new value, but key is intact,
+cas_id increases by 1; 
+old itemx is removed, a new itemx is added.
+
+The key point is: 
+new item is used to store value to avoid in-place update
+
+
+========================================
+reference
+========================================
+
+1. Jeff Bonwick: The Slab Allocator: An Object-Caching Kernel Memory Allocator
+2. how to daemonize: 
+http://www.itp.uzh.ch/~dpotter/howto/daemonize 
+http://www.netzmafia.de/skripten/unix/linux-daemon-howto.html
+http://www.win.tue.nl/~aeb/linux/lk/lk-10.html
+
+
+========================================
+Hints
+========================================
+
+1.
+resource pool: `free_queue`
+
+2.
+memcache_parse_req is a lexical DFA
+
+3.
+batched write -- slab sized -- slab_drain
+log-structured -- no in-place update -- itemx_removex, item_get (itemx_put)
+
+
+========================================
+Disk IO extension
+========================================
+
+1. 
+how slab_drain work currently
+
+                           ___
+	  ------------     |_|   
+	  |MEM       |     |_|
+	  |    ____  |     |_|
+	  | fu |sl|  |     |_|
+	  | ll |ab|<-|-----|_|<--,
+	  |    |__|  |     |_|   | exchange ADDR (slab offset, mem=1/0) info
+	  ------------     |_|   |
+                ||         |_|   | THEN, upper slabinfo points to SSD slab (full slab), 
+    data drain to ssd      |_|   |       and keeps the metadata (nalloc, cid)
+                ||         |_|   |
+   -------------------     |_|   |       lower slabinfo points to MEM slab (free slab),  
+   |SSD         \/   |     |_|   |       metadata would be inited when being used
+   |          ____   |     |_|   |
+   |        fr|sl|<--|-----|_|<--'
+   |        ee|ab|   |     |_|
+   |          |__|   |     |_|
+   |                 |     |_|
+   |                 |     |_|
+   -------------------     |_|
+                           |_|
+
+
+					    /* drain slab from mem to ssd */
+slab = slab_from_maddr(msinfo->addr, true); /* mem slab addr */
+size = settings.slab_size;                  
+off = slab_to_daddr(dsinfo);                /* ssd slab addr */
+n = pwrite(fd, slab, size, off);            /* blocking, synchronous */
+
+
+
+2.
+libaio vs posix aio
+(http://stackoverflow.com/questions/8768083/difference-between-posix-aio-and-libaio-on-linux)
+(http://code.google.com/p/kernel/wiki/AIOUserGuide)
+
+POSIX AIO
+-----------------------
+a user-level implementation that performs normal blocking I/O in multiple threads, 
+hence giving the illusion that the I/Os are asynchronous. 
+
+The main reason to do this is that:
+a. it works with any filesystem
+b. it works (essentially) on any operating system (keep in mind that gnu's libc is portable)
+c. it works on files with buffering enabled (i.e. no O_DIRECT flag set)
+
+The drawback is queue depth, number of threads might cause:
+a. slow operation on one disk blocks subsequent operations going to a different disk
+b. which I/Os (or how many) is seen by the kernel and the disk scheduler as well
+
+LIBAIO (Kernel AIO)
+-----------------------
+a. io requests are actually queued up in the kernel, sorted by by disk scheduler 
+b. forward to actual disks as asynchronous operations (using TCQ or NCQ)
+
+but,
+not supported by all fs
+have to open with O_DIRECT

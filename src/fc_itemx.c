@@ -111,6 +111,10 @@ itemx_init(void)
 
     /* init item index memory */
     itx = fc_mmap(settings.max_index_memory);
+    
+    loga("itemx memory space %zu, total num %zu", 
+	    settings.max_index_memory, n);
+
     if (itx == NULL) {
         return FC_ENOMEM;
     }

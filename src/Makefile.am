@@ -2,12 +2,12 @@ bin_PROGRAMS = fatcache
 
 AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
 
-AM_CFLAGS = -Wall
+AM_CFLAGS = -Wall 
 AM_CFLAGS += -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls
 AM_CFLAGS += -fno-strict-aliasing
 AM_CFLAGS += -Wunused-function -Wunused-value -Wunused-variable
 
-LDFLAGS += -rdynamic
+LDFLAGS += -rdynamic 
 
 fatcache_SOURCES =			\
 	fc_core.c fc_core.h		\
@@ -31,4 +31,5 @@ fatcache_SOURCES =			\
 	fc_array.c fc_array.h		\
 	fc_util.c fc_util.h		\
 	fc_queue.h			\
+	fc_aio.h  fc_aio.c		\
 	fc.c

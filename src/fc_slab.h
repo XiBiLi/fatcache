@@ -40,6 +40,9 @@ struct slabinfo {
     uint32_t              nfree;  /* # item freed (monotonic) */
     uint8_t               cid;    /* class id */
     unsigned              mem:1;  /* memory? */
+
+    unsigned              persisted:1; /* slab is moved to tmpbuf */
+    uint8_t              *tempaddr;    /* data temp addr */
 };
 
 TAILQ_HEAD(slabhinfo, slabinfo);
@@ -67,5 +70,11 @@ struct item *slab_read_item(uint32_t sid, uint32_t addr);
 
 rstatus_t slab_init(void);
 void slab_deinit(void);
+
+void * slab_from_maddr(uint32_t addr, bool verify);
+off_t  slab_to_daddr(struct slabinfo *sinfo);
+
+void slab_swap_addr(struct slabinfo *msinfo, struct slabinfo *dsinfo);
+void slabinfo_print(struct slabinfo *sinfo);
 
 #endif
