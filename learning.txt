@@ -301,3 +301,40 @@ b. forward to actual disks as asynchronous operations (using TCQ or NCQ)
 but,
 not supported by all fs
 have to open with O_DIRECT
+
+
+========================================
+Debug
+========================================
+
+1. 
+a. [to trigger slab_drain() quickly]
+control the min item size, and max slab mem size, 
+so that there is only one slab class; thus only one slab in memory
+
+b. [to trigger slab_evict() quickly]
+control the ssd file size, so that there is only one ssd slab
+
+c. [currently, do not consider the condition that 
+slab_drain() is triggered due to items are used up]
+control the index memory size, so that there are enough items for slab (at least 2)
+
+e.g.
+sudo bin/fatcache -f 10000000 -n 1048564 -m 1 -D /dev/loop0
+
+2.
+then mperf submit request one by one
+
+e.g.
+./bin/mcperf --sizes=u100,100 --num-calls=1  --num-conns=1 --call-rate=1 --conn-rate=1 --method=set --server=localhost --port=11211
+
+the first request is stored in memory slab
+the second request cause slab_drain()
+the third request cause slab_evict()
+
+BUG# slab_evict() read slab in, update items, then drop the slab.
+but (2nd) slab actually was not written into /dev/loop0, although the write completion event was issued.
+
+I guess this is because aio does not work with loopdev. 
+
+
