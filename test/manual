@@ -1,0 +1,7 @@
+sudo losetup /dev/loop0 test.img
+
+gcc -D_GNU_SOURCE test.c -I/home/kane/Util/include -lpthread -L/home/kane/Util/lib -laio -Wl,-rpath=/home/kane/Util/lib
+
+sudo ./a.out
+
+sudo losetup -d /dev/loop0
