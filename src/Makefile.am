@@ -1,13 +1,17 @@
 bin_PROGRAMS = fatcache
 
-AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
+AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 
 
 AM_CFLAGS = -Wall 
 AM_CFLAGS += -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls
 AM_CFLAGS += -fno-strict-aliasing
 AM_CFLAGS += -Wunused-function -Wunused-value -Wunused-variable
 
-LDFLAGS += -rdynamic 
+# environment dependent 
+AM_CPPFLAGS += -DLOOPDEV_SIMULATE_SSD
+CFLAGS += -I/home/kane/Util/include
+LDFLAGS += -rdynamic -Wl,-rpath=/home/kane/Util/lib
+LIBS += -laio
 
 fatcache_SOURCES =			\
 	fc_core.c fc_core.h		\

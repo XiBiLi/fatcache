@@ -833,7 +833,12 @@ slab_init(void)
     dend = ((settings.server_id + 1) * ndslab) * settings.slab_size;
 
     /* init disk descriptor */
+#ifndef LOOPDEV_SIMULATE_SSD
     fd = open(settings.ssd_device, O_RDWR | O_DIRECT, 0644);
+#else
+    fd = open(settings.ssd_device, O_RDWR, 0644);
+#endif
+
     if (fd < 0) {
 	log_error("open '%s' failed: %s", settings.ssd_device, strerror(errno));
 	return FC_ERROR;

@@ -5,3 +5,6 @@ gcc -D_GNU_SOURCE test.c -I/home/kane/Util/include -lpthread -L/home/kane/Util/l
 sudo ./a.out
 
 sudo losetup -d /dev/loop0
+
+[ref]
+http://lse.sourceforge.net/io/aio.html

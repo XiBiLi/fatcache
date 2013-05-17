@@ -338,14 +338,14 @@ handle_completion()
 
 	    ssdslab = cb->slab2wt;
 
-	    off_t off1 = slab_to_daddr(ssdslab);
-	    size_t size1 = settings.slab_size;
-
 	    ASSERT(((struct slab *)cb->slabbuf)->magic == SLAB_MAGIC);
-	    //pwrite(ssdfd, cb->slabbuf, size1, off1);
-	    //write(ssdfd, cb->slabbuf, size1);
 
 #if 0
+	    off_t off1 = slab_to_daddr(ssdslab);
+	    size_t size1 = settings.slab_size;
+	    pwrite(ssdfd, cb->slabbuf, size1, off1);
+	    write(ssdfd, cb->slabbuf, size1);
+
 	    /* read back to check slab integrity, OK! */
 	    log_debug(LOG_NOTICE, "read back to test integrity from cb->slab2wt");
 	    struct slab *slab = (struct slab *)ssdslab->tempaddr;

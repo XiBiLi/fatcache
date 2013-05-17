@@ -211,17 +211,6 @@ new item is used to store value to avoid in-place update
 
 
 ========================================
-reference
-========================================
-
-1. Jeff Bonwick: The Slab Allocator: An Object-Caching Kernel Memory Allocator
-2. how to daemonize: 
-http://www.itp.uzh.ch/~dpotter/howto/daemonize 
-http://www.netzmafia.de/skripten/unix/linux-daemon-howto.html
-http://www.win.tue.nl/~aeb/linux/lk/lk-10.html
-
-
-========================================
 Hints
 ========================================
 
@@ -337,4 +326,17 @@ but (2nd) slab actually was not written into /dev/loop0, although the write comp
 
 I guess this is because aio does not work with loopdev. 
 
+
+========================================
+reference
+========================================
+
+1. Jeff Bonwick: The Slab Allocator: An Object-Caching Kernel Memory Allocator
+2. how to daemonize: 
+http://www.itp.uzh.ch/~dpotter/howto/daemonize 
+http://www.netzmafia.de/skripten/unix/linux-daemon-howto.html
+http://www.win.tue.nl/~aeb/linux/lk/lk-10.html
+3. 
+when AIO works, and how
+http://lse.sourceforge.net/io/aio.html
 
