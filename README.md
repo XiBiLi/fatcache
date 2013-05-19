@@ -27,7 +27,7 @@ I am using kernel aio to enhance the parallelism among CPU, SSD and network
 within fatcache. In addition, I propose to drain and evict slabs according 
 to the characteristics of workload instead of the currently assumed FIFO policy.
 
-[Detailed version](https://github.com/cloudXane/fatcache/blob/asyncIO/proposal.txt)
+[Detailed version](https://github.com/cloudXane/fatcache/wiki/Proposal-of-GSOC%2713)
 
 ## Study Notes 
 [here](https://github.com/cloudXane/fatcache/blob/asyncIO/learning.txt)
