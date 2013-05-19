@@ -1,15 +1,22 @@
-TITLE:
+TITLE
+-------------------------------------------------------------------------------
 Improve the performance of fatcache with asynchronous I/O
 
-AUTHOR:
+
+
+AUTHOR
+-------------------------------------------------------------------------------
 Xiaobing Li @CloudXane
 
-ABSTRACT:
+
+
+ABSTRACT
+-------------------------------------------------------------------------------
 The most important feature of systems designed for Big Data applications 
 is horizontal scalability. And this is also true for distributed caching 
-system, which plays a very critical role in today's web services. But 
-pure in-memory cache systems, like memcached, are difficult to scale due 
-to the high cost and power consumption of DRAM.
+system, which plays a critical role in today's web services. But pure 
+in-memory cache systems, like memcached, are difficult to scale due to 
+the high cost and power consumption of DRAM.
 
 Fatcache, a cache system for Big Data, addresses the scalability issue by 
 utilizing SSD, which has higher capacity per dollar, lower power consumption 
@@ -25,15 +32,141 @@ parallelism among CPU, SSD and network within fatcache. In addition, I
 propose to drain and evict slabs according to the characteristics of 
 workload instead of currently assumed FIFO policy.
 
-DETAILS:
 
-RELATED WORKS:
 
-REFERENCE:
+INTRODUCTION
+-------------------------------------------------------------------------------
+1. The framework of fatcache 
+   
+The protocol used by fatcache is compatible with memcached, and the minimum 
+data unit can be requested by user is called item. Thus, there are two main
+modules in fatcache, i.e. communication module and items management module.
+
+
+Figure 1. The framework of fatcache: single-thread & event-driven model
+
+		--------------               --------------
+		|            |      req      |            |     
+		|    items   |<--------------|    comm    |
+		| management |-------------->| management |
+		|            |      rsp      |  (epoll)   |
+		--------------               --------------
+		      ||                           || 
+	-------------------------------      --------------
+	|     in-memory index &       |      |  a pool of |
+	|     metadata management     |      |    mbuf    |
+	-------------------------------      --------------                     
+
+
+Communication module is designed according to event-driven model. The type
+of user request is analyzed here, and relevant functions in the items 
+management module are called when the type is determined, specifically, it 
+is in current thread that the functions are called and return to; and unless 
+the service for current request is done, the next request will not be served.
+
+Slab allocator [3] is assumed in the items management module. Firstly, a 
+portion of memory and SSD are divided into fix-sized slabs, which are the 
+minimum unit for storage management. A slab can hold multiple items, whose 
+sizes are within a same range. And slabs storing items of certain size belong 
+to the same slab class. Besides, for each item, there is an index pointing 
+which slab it is at. And these indexes reduce the number of SSD read 
+operations to one at most.
+
+
+2. SSD I/O within fatcache
+
+Considering the SSD write operation is not efficient, fatcache batches small 
+random writes in memory and writes data to SSD at the granularity of slab [1]. 
+New items are always stored in memory slab. If all memory slabs are full, 
+the oldest one is drained to SSD. Because the write operation is blocking and 
+on the critical path to serve the item adding request, nothing can continue  
+before this operation completes, which degrades the performance of fatcache.
+
+The item to get might be in either memory or SSD. If in memory, we are done;
+if in SSD, a blocking synchronous read operation is issued. But as stated in 
+[1, 2], one SSD read is not a dominant factor in the latency compared with 
+network.
+
+
+
+DESIGN AND IMPLEMENTATION
+-------------------------------------------------------------------------------
+1. Make slab draining asynchronous 
+
+Different from SSD read, SSD write is not necessary to respond the item adding 
+request, thus should be removed to shorten the critical path of service. An
+intuitive method is to render it asynchronous. In this way, when slab draining
+is required to add a new item, fatcache can move the oldest full slab to a buffer, 
+submit an asynchronous write operation to flush this slab to SSD, and then add the 
+item to the newly freed slab without waiting for the write to finish. To accomplish 
+this, a portion of memory should be used as the buffer for asynchronous write. 
+In fact, before being drained to SSD, slabs in the buffer can still be accessed 
+to respond the requests retrieving items.
+
+
+2. Make slab eviction asynchronous 
+
+Slab draining is needed when memory slabs are used up. But when SSD is full, 
+slab draining cannot be continued until a SSD slab is evicted. To evict a SSD 
+slab will read the slab back into memory so as to remove the indexes of the 
+items stored in it. And similar with slab draining, it is the oldest full SSD 
+slab to be evicted. FIFO policy is used in both slab draining and slab eviction. 
+
+In fact, because each index entry has the ID of the slab, where the relevant item 
+is placed, eviction can be conducted without reading the slab back. Based on this,
+I propose to make slab eviction asynchronous too. Furthermore, a background thread
+can be launched to evict the old SSD slabs and clean the corresponding indexes; 
+additionally, all the work can be done without contending SSD.
+
+
+3. Which slab to drain and to evict
+
+As stated above, FIFO policy is used in both slab draining and slab eviction. 
+But with the new asynchronous mechanisms, we should reconsider the policy assumed.
+Cache system should be aware of the dynamics of workload in order to keep the most 
+popular data in memory. While FIFO policy has little knowledge about the workload
+characteristics. Accordingly, we propose:
+1) Slab upgrading to complement the FIFO policy used in slab draining, where quick 
+decision is required. I.e., SSD slabs can be moved to memory when becoming popular enough.
+2) Workload-aware slab eviction to drop the least popular SSD slabs instead of the 
+oldest one. 
+
+
+4. Some implementation details 
+
+Kernel aio and eventfd [4] are used to implement asynchronous slab draining. 
+Kernel aio provides a bunch of APIs to submit asynchronous I/O; and eventfd is 
+used to notify the completion of asynchronous operations. Besides, eventfd can be
+registered to epoll to avoid busy-waiting. 
+
+Till now, asynchronous slab draining has been implemented. 
+
+
+
+RELATED WORKS (To be continued)
+-------------------------------------------------------------------------------
+
+1. memcached [5]
+2. workload-aware [6, 7, 8]
+3. slab allocator [3]
+
+
+
+REFERENCE
+-------------------------------------------------------------------------------
 [1] https://github.com/twitter/fatcache/.
 [2] https://gist.github.com/jboner/2841832.
+[3] The Slab Allocator: An Object-Caching Kernel Memory Allocator. Jeff Bonwick. 
+[4] http://code.google.com/p/kernel/wiki/AIOUserGuide
+[5] http://memcached.org/
+[6] Workload-aware load balancing for clustered Web servers
+[7] Popularity-aware greedy dual-size web proxy caching algorithms
+[8] Web proxy workload characterisation and modelling
 
-PERSONAL INFORMATION:
+
+
+PERSONAL INFORMATION
+-------------------------------------------------------------------------------
 I will graduate as a master student from Auburn University this summer, 
 and am looking for jobs on cloud computing and big data in California.
-My linkedIn is at http://www.linkedin.com/pub/xiaobing-li/69/a71/319.
+My LinkedIn is at http://www.linkedin.com/pub/xiaobing-li/69/a71/319.

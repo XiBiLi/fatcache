@@ -1,6 +1,6 @@
 Fork to Learn and Extend fatcache, which is SSD-backed memcached for Big Data. 
 
-## Initial Git  
+## Initial Repository 
 [here](https://github.com/twitter/fatcache/)
 
 ## Proposal Abstract for [Fatcache@gsoc'13](https://github.com/twitter/twitter.github.com/wiki/Google-Summer-of-Code-2013)
