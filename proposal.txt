@@ -38,7 +38,7 @@ INTRODUCTION
 -------------------------------------------------------------------------------
 1. The framework of fatcache 
    
-The protocol used by fatcache is compatible with memcached, and the minimum 
+The protocol used by fatcache is compatible with memcached [5], and the minimum 
 data unit can be requested by user is called item. Thus, there are two main
 modules in fatcache, i.e. communication module and items management module.
 
@@ -143,7 +143,7 @@ Till now, asynchronous slab draining has been implemented.
 
 
 
-RELATED WORKS (To be continued)
+RELATED WORK (To be continued)
 -------------------------------------------------------------------------------
 
 1. memcached [5]
@@ -152,7 +152,7 @@ RELATED WORKS (To be continued)
 
 
 
-REFERENCE
+REFERENCES
 -------------------------------------------------------------------------------
 [1] https://github.com/twitter/fatcache/.
 [2] https://gist.github.com/jboner/2841832.

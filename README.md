@@ -1,9 +1,9 @@
 Fork to Learn and Extend fatcache, which is SSD-backed memcached for Big Data. 
 
-## Initial Repository 
+### Initial Repository 
 [here](https://github.com/twitter/fatcache/)
 
-## Proposal Abstract for [Fatcache@gsoc'13](https://github.com/twitter/twitter.github.com/wiki/Google-Summer-of-Code-2013)
+### Proposal Abstract for [Fatcache@gsoc'13](https://github.com/twitter/twitter.github.com/wiki/Google-Summer-of-Code-2013)
 
 **Improve the performance of fatcache with asynchronous I/O** 
 
@@ -29,8 +29,22 @@ to the characteristics of workload instead of the currently assumed FIFO policy.
 
 [Detailed version](https://github.com/cloudXane/fatcache/wiki/Proposal-of-GSOC%2713)
 
-## Study Notes 
+### Implementation Details
+
+The extension is mainly in src/fc\_aio and little modification to src/fc\_slab.
+Kernel aio and eventfd are used to implement this asynchronous mechanism. 
+
+Kernel aio provides some APIs to prepare and submit asynchronous I/O operations; 
+and the eventfd is registered to epoll to wait for I/O completion notification in 
+another thread, and then do some post-processing to keep system state consistent. 
+(Because the epoll for network communication is encapsulated specifically for struct 
+conn, and not straightforward to be reused for SSD I/O.)
+
+Currently, no full-coverage debug is conducted due to lack of devices. 
+Workload-aware caching policy is being studied.
+
+### Study Notes 
 [here](https://github.com/cloudXane/fatcache/blob/asyncIO/learning.txt)
 
-## Personal Information
+### Personal Information
 [LinkedIn](http://www.linkedin.com/pub/xiaobing-li/69/a71/319)
