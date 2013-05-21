@@ -10,7 +10,7 @@ Fork to Learn and Extend fatcache, which is SSD-backed memcached for Big Data.
 The most important feature of systems designed for Big Data applications 
 is horizontal scalability. And this is also true for distributed caching 
 system, which plays a critical role in today's web services. 
-But pure in-memory cache systems, like memcached, are difficult to scale
+But pure in-memory cache systems, like memcached, are difficult to scale out
 due to the high cost and power consumption of DRAM 
 [[1](https://github.com/twitter/fatcache/)].
 Fatcache, a cache system for Big Data, addresses the scalability issue
@@ -31,16 +31,16 @@ to the characteristics of workload instead of the currently assumed FIFO policy.
 
 ### Implementation Details
 
-The extension is mainly in src/fc\_aio and little modification to src/fc\_slab.
-Kernel aio and eventfd are used to implement this asynchronous mechanism. 
+The extension is mainly in src/fc\_aio, with little modification to src/fc\_slab.
+Kernel aio and Eventfd are used to implement this asynchronous mechanism. 
 
-Kernel aio provides some APIs to prepare and submit asynchronous I/O operations; 
-and the eventfd is registered to epoll to wait for I/O completion notification in 
-another thread, and then do some post-processing to keep system state consistent. 
-(Because the epoll for network communication is encapsulated specifically for struct 
-conn, and not straightforward to be reused for SSD I/O.)
+Kernel aio provides some APIs to prepare and submit asynchronous I/O operations.
+The eventfd is registered to epoll to wait for I/O completion notification in 
+another thread; then post-processing is done to keep system state consistent. 
+I choose to use one more thread is because the existing epoll for network communication 
+is encapsulated specifically for **struct conn**, and not easy to be reused for SSD I/O.
 
-Currently, no full-coverage debug is conducted due to lack of devices. 
+Currently, no full-coverage debug is conducted due to the lack of devices. 
 Workload-aware caching policy is being studied.
 
 ### Study Notes 
